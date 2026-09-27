@@ -36,6 +36,7 @@ import riskControlAPI from './riskControl'
 import adminComplianceAPI from './compliance'
 import auditAPI from './audit'
 import pluginsAPI from './plugins'
+import deviceIdentityAPI from './deviceIdentity'
 
 /**
  * Unified admin API object for convenient access
@@ -73,7 +74,8 @@ export const adminAPI = {
   riskControl: riskControlAPI,
   compliance: adminComplianceAPI,
   audit: auditAPI,
-  plugins: pluginsAPI
+  plugins: pluginsAPI,
+  deviceIdentity: deviceIdentityAPI
 }
 
 export {
@@ -109,7 +111,8 @@ export {
   riskControlAPI,
   adminComplianceAPI,
   auditAPI,
-  pluginsAPI
+  pluginsAPI,
+  deviceIdentityAPI
 }
 
 export default adminAPI
@@ -120,6 +123,13 @@ export type { BalanceHistoryItem } from './users'
 export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from './errorPassthrough'
 export type { BackupAgentHealth, DataManagementConfig } from './dataManagement'
 export type { TLSFingerprintProfile, CreateProfileRequest, UpdateProfileRequest } from './tlsFingerprintProfile'
+export type {
+  DeviceIdentityAccount,
+  DeviceIdentityFilters,
+  DeviceIdentityBatchResult,
+  DeviceIdentityResetResult,
+  DeviceIdentityPlatform
+} from './deviceIdentity'
 export type { ContentModerationConfig, ContentModerationLog, ModerationMode } from './riskControl'
 export type {
   PluginInstallation,

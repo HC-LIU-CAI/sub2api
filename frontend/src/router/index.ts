@@ -526,6 +526,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/device-identity',
+    name: 'AdminDeviceIdentity',
+    component: () => import('@/views/admin/DeviceIdentityView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Device Identity',
+      titleKey: 'admin.deviceIdentity.title',
+      descriptionKey: 'admin.deviceIdentity.description'
+    }
+  },
+  {
     path: '/admin/plugins',
     name: 'AdminPlugins',
     component: () => import('@/views/admin/PluginsView.vue'),

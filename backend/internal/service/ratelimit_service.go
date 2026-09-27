@@ -1018,6 +1018,18 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	// 生产环境的 OpenAI 定制策略把普通 403 视为请求/链路级拒绝：只让网关
+	// failover 到下一个账号，不累计账号 403 计数，也不写临时不可调度或错误状态。
+	// 账号凭据、工作区状态和配额耗尽等明确证据仍走原有账号处罚策略。
+	if account.Platform == PlatformOpenAI && !isOpenAI403AccountSignal(upstreamMsg, responseBody) {
+		slog.Warn(
+			"openai_403_failover_only",
+			"account_id", account.ID,
+			"upstream_message", upstreamMsg,
+		)
+		return false
+	}
+
 	// 上游代理 / CDN 在请求到达 OpenAI API 之前就拦下时，回的是 HTML 403 页面而不是
 	// {"error":{...}} 结构化错误。这类响应描述的是「这条链路 / 这个端点被挡了」，
 	// 不构成账号凭据或权限失效的证据——例如无效的 /v1/responses 子路径（#5334）。
@@ -1091,6 +1103,41 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		"threshold", openAI403DisableThreshold,
 	)
 	return true
+}
+
+// isOpenAI403AccountSignal distinguishes account-specific failures from generic
+// request/edge 403 responses. The latter are safe to fail over without mutating
+// account state; the former must retain the existing cooldown/escalation path.
+func isOpenAI403AccountSignal(upstreamMsg string, responseBody []byte) bool {
+	combined := strings.ToLower(upstreamMsg + "\n" + string(responseBody))
+	for _, marker := range []string{
+		"invalid_api_key",
+		"invalid api key",
+		"api_key_disabled",
+		"authentication_error",
+		"authentication_failed",
+		"workspace_suspended",
+		"workspace suspended",
+		"workspace has been suspended",
+		"workspace deactivated",
+		"workspace has been deactivated",
+		"deactivated_workspace",
+		"organization_deactivated",
+		"organization deactivated",
+		"credential rejected",
+		"credential_rejected",
+		"account is disabled",
+		"account deactivated",
+		"access_terminated_error",
+		"usage limit",
+		"quota exceeded",
+		"quota will reset",
+	} {
+		if strings.Contains(combined, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCloudflareBotBlockResponse reports Cloudflare's WAF bot-signature response

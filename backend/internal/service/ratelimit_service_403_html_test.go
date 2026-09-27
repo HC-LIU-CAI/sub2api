@@ -130,35 +130,67 @@ func TestHandleUpstreamError_OpenAICloudflare1010DoesNotPenalizeAccount(t *testi
 	}
 }
 
-// 对照不变式：真正的结构化 JSON 403 是账号级证据，处罚链路必须原样保留。
-// 缺了这组断言，上面的跳过逻辑一旦写宽就会把真实的封号 403 也放过去。
-func TestHandleUpstreamError_OpenAIStructured403StillPenalizes(t *testing.T) {
-	t.Run("first_hit_temp_unschedulable", func(t *testing.T) {
-		h := newOpenAI403TestHarness(t, 503, 1)
+// 普通 OpenAI 403 只触发 failover，不应累计账号计数、临时冷却或永久下线。
+// 这覆盖结构化 JSON 和纯文本响应，避免只豁免 HTML/Cloudflare 页面而遗漏
+// 生产环境中同样属于请求级拒绝的普通 403。
+func TestHandleUpstreamError_OpenAIStructured403FailoverOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"structured_json", `{"error":{"message":"Your account is not authorized"}}`},
+		{"plain_text", "Forbidden"},
+	}
 
-		require.True(t, h.handle(`{"error":{"message":"Your account is not authorized"}}`))
-		require.Equal(t, 1, h.counter.increments)
-		require.Equal(t, 1, h.repo.tempCalls)
-		require.Equal(t, 0, h.repo.setErrorCalls)
-		require.Contains(t, h.repo.lastTempReason, "Your account is not authorized")
-		require.Len(t, h.blocker.accounts, 1)
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newOpenAI403TestHarness(t, 503, 1, 2, 3, 4)
 
-	t.Run("threshold_disables", func(t *testing.T) {
-		h := newOpenAI403TestHarness(t, 504, int64(openAI403DisableThreshold))
+			for i := 0; i < openAI403DisableThreshold+1; i++ {
+				require.False(t, h.handle(tc.body), "第 %d 次普通 OpenAI 403 仍不得下线账号", i+1)
+			}
+			h.requireNoAccountPenalty(t)
+		})
+	}
+}
 
-		require.True(t, h.handle(`{"error":{"message":"workspace forbidden by policy"}}`))
-		require.Equal(t, 1, h.repo.setErrorCalls)
-		require.Contains(t, h.repo.lastErrorMsg, "workspace forbidden by policy")
-	})
+func TestIsOpenAI403AccountSignal(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		body string
+		want bool
+	}{
+		{"invalid_api_key", "", `{"error":{"code":"invalid_api_key"}}`, true},
+		{"workspace_suspended", "", `{"error":{"message":"workspace has been suspended"}}`, true},
+		{"quota_exhausted", "", `{"error":{"type":"access_terminated_error"}}`, true},
+		{"ordinary_request_rejection", "request was rejected", `{"error":{"message":"forbidden"}}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isOpenAI403AccountSignal(tc.msg, []byte(tc.body)))
+		})
+	}
+}
 
-	// 非 HTML 的非结构化响应（纯文本网关错误）不在本次放行范围内，维持原有处罚。
-	t.Run("plain_text_body_unchanged", func(t *testing.T) {
-		h := newOpenAI403TestHarness(t, 505, 1)
+// 作用域守卫：OpenCode Go 仍使用原有结构化 403 计数策略，定制只改变 OpenAI。
+func TestHandleUpstreamError_OpenCodeStructured403StillPenalizes(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	counter := &countingOpenAI403CounterCache{
+		openAI403CounterCacheStub: openAI403CounterCacheStub{counts: []int64{1}},
+	}
+	blocker := &runtimeBlockRecorder{}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc.SetOpenAI403CounterCache(counter)
+	svc.SetAccountRuntimeBlocker(blocker)
+	account := &Account{ID: 505, Platform: PlatformOpenCodeGo, Type: AccountTypeAPIKey}
 
-		require.True(t, h.handle("Forbidden"))
-		require.Equal(t, 1, h.repo.tempCalls)
-	})
+	require.True(t, svc.HandleUpstreamError(
+		context.Background(), account, http.StatusForbidden, http.Header{},
+		[]byte(`{"error":{"message":"account forbidden"}}`),
+	))
+	require.Equal(t, 1, counter.increments)
+	require.Equal(t, 1, repo.tempCalls)
 }
 
 // 作用域守卫：放行只针对 OpenAI 平台。其他平台的 403 处理不受影响。
