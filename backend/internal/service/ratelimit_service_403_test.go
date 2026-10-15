@@ -72,7 +72,7 @@ func TestRateLimitService_HandleUpstreamError_OpenAI403OrdinaryRepeatedRequestsS
 		account,
 		http.StatusForbidden,
 		http.Header{},
-		[]byte(`{"error":{"message":"workspace forbidden by policy"}}`),
+		[]byte(`{"error":{"message":"temporary edge rejection"}}`),
 	)
 
 	require.False(t, shouldDisable)
