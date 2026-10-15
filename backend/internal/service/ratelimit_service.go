@@ -1043,6 +1043,15 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	// 普通 OpenAI 403 只触发当前请求 failover；明确的凭据、工作区或配额错误继续走账号处罚。
+	if account.Platform == PlatformOpenAI && !isOpenAI403AccountSignal(upstreamMsg, responseBody) {
+		slog.Warn(
+			"openai_403_failover_only",
+			"account_id", account.ID,
+			"upstream_message", upstreamMsg,
+		)
+		return false
+	}
 	// 上游代理 / CDN 在请求到达 OpenAI API 之前就拦下时，回的是 HTML 403 页面而不是
 	// {"error":{...}} 结构化错误。这类响应描述的是「这条链路 / 这个端点被挡了」，
 	// 不构成账号凭据或权限失效的证据——例如无效的 /v1/responses 子路径（#5334）。
@@ -1116,6 +1125,40 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		"threshold", openAI403DisableThreshold,
 	)
 	return true
+}
+
+// isOpenAI403AccountSignal identifies 403 responses that prove an account-level failure.
+// Generic edge/request 403 responses remain failover-only.
+func isOpenAI403AccountSignal(upstreamMsg string, responseBody []byte) bool {
+	combined := strings.ToLower(upstreamMsg + "\n" + string(responseBody))
+	for _, marker := range []string{
+		"invalid_api_key",
+		"invalid api key",
+		"api_key_disabled",
+		"authentication_error",
+		"authentication_failed",
+		"workspace_suspended",
+		"workspace suspended",
+		"workspace has been suspended",
+		"workspace deactivated",
+		"workspace has been deactivated",
+		"deactivated_workspace",
+		"organization_deactivated",
+		"organization deactivated",
+		"credential rejected",
+		"credential_rejected",
+		"account is disabled",
+		"account deactivated",
+		"access_terminated_error",
+		"usage limit",
+		"quota exceeded",
+		"quota will reset",
+	} {
+		if strings.Contains(combined, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCloudflareBotBlockResponse reports Cloudflare's WAF bot-signature response
